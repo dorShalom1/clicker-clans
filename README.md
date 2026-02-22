@@ -7,11 +7,15 @@ Cross-platform clicker game built with Expo + React Native for Android and iOS.
 - Big tap button that increases click count
 - `Classic` mode
 - Levels every 25 clicks
-- Prize unlocks based on level milestones
+- Coin economy
+- Upgrade shop (`Power Tap`, `Auto Tapper`)
+- Prize unlock + claim flow based on level milestones
 - Trophy unlocks based on activity and progress
 - `Multiplayer` mode
 - Team selection
-- Shared team click counter
+- Shared team click counter with team contribution tracking
+- Fair-play tap cooldown guard
+- Team season target progress + team level
 - Live leaderboard (simulated rival team growth)
 
 ## Run locally

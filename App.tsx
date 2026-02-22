@@ -10,31 +10,67 @@ import {
 } from "react-native";
 
 type Mode = "classic" | "multiplayer";
+type UpgradeKey = "powerTap" | "autoTap";
 
 const LEVEL_SIZE = 25;
 const TEAM_NAMES = ["Solar Squad", "Ocean Owls", "Forest Foxes", "Desert Drifters"];
+const SEASON_TARGET = 1200;
+const TAP_COOLDOWN_MS = 90;
+
 const PRIZES = [
-  { level: 2, name: "Bronze Capsule" },
-  { level: 4, name: "Lucky Crate" },
-  { level: 6, name: "Silver Beacon" },
-  { level: 8, name: "Gold Relic" },
-  { level: 10, name: "Champion Medal" },
-  { level: 12, name: "Legend Crown" },
+  { level: 2, name: "Bronze Capsule", rewardCoins: 15 },
+  { level: 4, name: "Lucky Crate", rewardCoins: 25 },
+  { level: 6, name: "Silver Beacon", rewardCoins: 45 },
+  { level: 8, name: "Gold Relic", rewardCoins: 70 },
+  { level: 10, name: "Champion Medal", rewardCoins: 95 },
+  { level: 12, name: "Legend Crown", rewardCoins: 130 },
 ];
+
+const UPGRADE_META: Record<
+  UpgradeKey,
+  { label: string; baseCost: number; maxLevel: number; description: string }
+> = {
+  powerTap: {
+    label: "Power Tap",
+    baseCost: 20,
+    maxLevel: 10,
+    description: "+1 click per tap in Classic mode",
+  },
+  autoTap: {
+    label: "Auto Tapper",
+    baseCost: 35,
+    maxLevel: 8,
+    description: "+1 passive click per second in Classic mode",
+  },
+};
+
+const initialTeamScores = TEAM_NAMES.reduce<Record<string, number>>((acc, team, idx) => {
+  acc[team] = 70 + idx * 20;
+  return acc;
+}, {});
+
+const initialTeamContribution = TEAM_NAMES.reduce<Record<string, number>>((acc, team) => {
+  acc[team] = 0;
+  return acc;
+}, {});
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("classic");
   const [totalClicks, setTotalClicks] = useState(0);
   const [classicClicks, setClassicClicks] = useState(0);
   const [teamClicks, setTeamClicks] = useState(0);
+  const [coins, setCoins] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [selectedTeam, setSelectedTeam] = useState(TEAM_NAMES[0]);
-  const [teamScores, setTeamScores] = useState<Record<string, number>>(() =>
-    TEAM_NAMES.reduce<Record<string, number>>((acc, team, idx) => {
-      acc[team] = 60 + idx * 15;
-      return acc;
-    }, {})
-  );
+  const [teamScores, setTeamScores] = useState<Record<string, number>>(initialTeamScores);
+  const [teamContribution, setTeamContribution] = useState<Record<string, number>>(initialTeamContribution);
+  const [upgradeLevels, setUpgradeLevels] = useState<Record<UpgradeKey, number>>({
+    powerTap: 0,
+    autoTap: 0,
+  });
+  const [claimedPrizes, setClaimedPrizes] = useState<number[]>([]);
+  const [antiSpamNotice, setAntiSpamNotice] = useState("");
+  const [lastTapAt, setLastTapAt] = useState(0);
 
   useEffect(() => {
     const timer = setInterval(() => setElapsedSeconds((prev) => prev + 1), 1000);
@@ -42,13 +78,38 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const autoTapLevel = upgradeLevels.autoTap;
+    if (autoTapLevel === 0) {
+      return;
+    }
+
+    const autoTapTimer = setInterval(() => {
+      setClassicClicks((prev) => prev + autoTapLevel);
+      setTotalClicks((prev) => prev + autoTapLevel);
+      setCoins((prev) => prev + autoTapLevel);
+    }, 1000);
+
+    return () => clearInterval(autoTapTimer);
+  }, [upgradeLevels.autoTap]);
+
+  useEffect(() => {
+    const noticeTimer = setTimeout(() => setAntiSpamNotice(""), antiSpamNotice ? 1100 : 0);
+    return () => clearTimeout(noticeTimer);
+  }, [antiSpamNotice]);
+
+  useEffect(() => {
     const multiplayerTick = setInterval(() => {
       setTeamScores((prev) => {
+        const leader = Math.max(...Object.values(prev));
         const next = { ...prev };
+
         TEAM_NAMES.forEach((team) => {
-          const passiveBoost = team === selectedTeam ? Math.floor(Math.random() * 2) : Math.floor(Math.random() * 3);
-          next[team] += passiveBoost;
+          const trailingBoost = prev[team] < leader - 80 ? 1 : 0;
+          const selectedBoost = team === selectedTeam ? Math.floor(Math.random() * 2) : 0;
+          const baseBoost = 1 + Math.floor(Math.random() * 3);
+          next[team] += baseBoost + trailingBoost + selectedBoost;
         });
+
         return next;
       });
     }, 2500);
@@ -56,18 +117,21 @@ export default function App() {
     return () => clearInterval(multiplayerTick);
   }, [selectedTeam]);
 
+  const tapPower = 1 + upgradeLevels.powerTap;
   const level = Math.floor(classicClicks / LEVEL_SIZE) + 1;
   const nextLevelProgress = (classicClicks % LEVEL_SIZE) / LEVEL_SIZE;
   const unlockedPrizes = PRIZES.filter((prize) => prize.level <= level);
+
   const trophies = useMemo(
     () => [
       { name: "First Spark", unlocked: classicClicks >= 10 },
-      { name: "Prize Hunter", unlocked: unlockedPrizes.length >= 3 },
+      { name: "Builder", unlocked: upgradeLevels.powerTap >= 3 || upgradeLevels.autoTap >= 2 },
+      { name: "Prize Hunter", unlocked: claimedPrizes.length >= 3 },
       { name: "Steady Tapper", unlocked: elapsedSeconds >= 180 && classicClicks >= 120 },
       { name: "Legend Seed", unlocked: level >= 10 },
-      { name: "Team Player", unlocked: teamClicks >= 40 },
+      { name: "Team Player", unlocked: teamClicks >= 70 },
     ],
-    [classicClicks, elapsedSeconds, level, teamClicks, unlockedPrizes.length]
+    [classicClicks, upgradeLevels.powerTap, upgradeLevels.autoTap, claimedPrizes.length, elapsedSeconds, level, teamClicks]
   );
 
   const sortedTeams = useMemo(
@@ -75,20 +139,64 @@ export default function App() {
     [teamScores]
   );
   const selectedTeamRank = sortedTeams.findIndex(([name]) => name === selectedTeam) + 1;
+  const selectedTeamScore = teamScores[selectedTeam];
+  const selectedTeamLevel = Math.floor(selectedTeamScore / 250) + 1;
+  const seasonProgress = Math.min(selectedTeamScore / SEASON_TARGET, 1);
 
   const onMainClick = () => {
-    setTotalClicks((prev) => prev + 1);
-
     if (mode === "classic") {
-      setClassicClicks((prev) => prev + 1);
+      setTotalClicks((prev) => prev + tapPower);
+      setClassicClicks((prev) => prev + tapPower);
+      setCoins((prev) => prev + tapPower);
       return;
     }
 
+    const now = Date.now();
+    if (now - lastTapAt < TAP_COOLDOWN_MS) {
+      setAntiSpamNotice("Too fast. Fair play guard skipped that tap.");
+      return;
+    }
+
+    setLastTapAt(now);
+    setTotalClicks((prev) => prev + 1);
     setTeamClicks((prev) => prev + 1);
     setTeamScores((prev) => ({
       ...prev,
       [selectedTeam]: prev[selectedTeam] + 1,
     }));
+    setTeamContribution((prev) => ({
+      ...prev,
+      [selectedTeam]: prev[selectedTeam] + 1,
+    }));
+  };
+
+  const buyUpgrade = (upgradeKey: UpgradeKey) => {
+    const currentLevel = upgradeLevels[upgradeKey];
+    const config = UPGRADE_META[upgradeKey];
+
+    if (currentLevel >= config.maxLevel) {
+      return;
+    }
+
+    const cost = config.baseCost * (currentLevel + 1);
+    if (coins < cost) {
+      return;
+    }
+
+    setCoins((prev) => prev - cost);
+    setUpgradeLevels((prev) => ({
+      ...prev,
+      [upgradeKey]: prev[upgradeKey] + 1,
+    }));
+  };
+
+  const claimPrize = (levelToClaim: number, rewardCoins: number) => {
+    if (claimedPrizes.includes(levelToClaim) || level < levelToClaim) {
+      return;
+    }
+
+    setClaimedPrizes((prev) => [...prev, levelToClaim]);
+    setCoins((prev) => prev + rewardCoins);
   };
 
   const formattedTime = `${String(Math.floor(elapsedSeconds / 60)).padStart(2, "0")}:${String(elapsedSeconds % 60).padStart(2, "0")}`;
@@ -129,6 +237,10 @@ export default function App() {
             <Text style={styles.statLabel}>Session</Text>
             <Text style={styles.statValue}>{formattedTime}</Text>
           </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Coins</Text>
+            <Text style={styles.statValue}>{coins}</Text>
+          </View>
         </View>
 
         {mode === "classic" ? (
@@ -142,15 +254,67 @@ export default function App() {
               {LEVEL_SIZE - (classicClicks % LEVEL_SIZE)} clicks to next level
             </Text>
 
+            <Text style={styles.sectionTitle}>Upgrades</Text>
+            {(Object.keys(UPGRADE_META) as UpgradeKey[]).map((upgradeKey) => {
+              const config = UPGRADE_META[upgradeKey];
+              const currentLevel = upgradeLevels[upgradeKey];
+              const cost = config.baseCost * (currentLevel + 1);
+              const maxed = currentLevel >= config.maxLevel;
+              const canAfford = coins >= cost;
+
+              return (
+                <View key={upgradeKey} style={styles.listRowColumn}>
+                  <View style={styles.upgradeHeader}>
+                    <Text style={styles.listText}>{config.label}</Text>
+                    <Text style={styles.upgradeLevel}>Lv {currentLevel}/{config.maxLevel}</Text>
+                  </View>
+                  <Text style={styles.progressText}>{config.description}</Text>
+                  <Pressable
+                    style={[
+                      styles.actionButton,
+                      (!canAfford || maxed) && styles.actionButtonDisabled,
+                    ]}
+                    onPress={() => buyUpgrade(upgradeKey)}
+                    disabled={!canAfford || maxed}
+                  >
+                    <Text style={styles.actionButtonText}>
+                      {maxed ? "Max Level" : `Buy (${cost} coins)`}
+                    </Text>
+                  </Pressable>
+                </View>
+              );
+            })}
+
             <Text style={styles.sectionTitle}>Prizes</Text>
-            {PRIZES.map((prize) => (
-              <View key={prize.name} style={styles.listRow}>
-                <Text style={styles.listText}>{prize.name}</Text>
-                <Text style={prize.level <= level ? styles.unlocked : styles.locked}>
-                  {prize.level <= level ? "Unlocked" : `Lvl ${prize.level}`}
-                </Text>
-              </View>
-            ))}
+            {PRIZES.map((prize) => {
+              const isUnlocked = prize.level <= level;
+              const isClaimed = claimedPrizes.includes(prize.level);
+              return (
+                <View key={prize.name} style={styles.listRowColumn}>
+                  <View style={styles.upgradeHeader}>
+                    <Text style={styles.listText}>{prize.name}</Text>
+                    <Text style={isUnlocked ? styles.unlocked : styles.locked}>
+                      {isUnlocked ? "Unlocked" : `Lvl ${prize.level}`}
+                    </Text>
+                  </View>
+                  <View style={styles.upgradeHeader}>
+                    <Text style={styles.progressText}>Reward: +{prize.rewardCoins} coins</Text>
+                    <Pressable
+                      style={[
+                        styles.actionButton,
+                        (!isUnlocked || isClaimed) && styles.actionButtonDisabled,
+                      ]}
+                      onPress={() => claimPrize(prize.level, prize.rewardCoins)}
+                      disabled={!isUnlocked || isClaimed}
+                    >
+                      <Text style={styles.actionButtonText}>
+                        {isClaimed ? "Claimed" : "Claim"}
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            })}
 
             <Text style={styles.sectionTitle}>Trophies</Text>
             {trophies.map((trophy) => (
@@ -167,6 +331,8 @@ export default function App() {
             <Text style={styles.panelTitle}>Multiplayer Teams</Text>
             <Text style={styles.progressText}>Join a team, tap together, and race the leaderboard.</Text>
 
+            {antiSpamNotice ? <Text style={styles.notice}>{antiSpamNotice}</Text> : null}
+
             <View style={styles.teamRow}>
               {TEAM_NAMES.map((team) => (
                 <Pressable
@@ -181,9 +347,18 @@ export default function App() {
               ))}
             </View>
 
-            <Text style={styles.sectionTitle}>
-              {selectedTeam} rank: #{selectedTeamRank}
+            <Text style={styles.sectionTitle}>{selectedTeam} rank: #{selectedTeamRank}</Text>
+            <Text style={styles.progressText}>
+              Team level {selectedTeamLevel} | Your team taps: {teamContribution[selectedTeam]}
             </Text>
+
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${seasonProgress * 100}%` }]} />
+            </View>
+            <Text style={styles.progressText}>
+              Season goal: {selectedTeamScore}/{SEASON_TARGET} clicks
+            </Text>
+
             {sortedTeams.map(([team, score], index) => (
               <View key={team} style={styles.listRow}>
                 <Text style={styles.listText}>
@@ -208,7 +383,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingBottom: 28,
     paddingTop: 8,
-    alignItems: 'center',
+    alignItems: "center",
   },
   title: {
     color: "#effaf2",
@@ -296,7 +471,7 @@ const styles = StyleSheet.create({
   },
   statValue: {
     color: "#f0fff6",
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: "800",
     marginTop: 4,
   },
@@ -333,13 +508,14 @@ const styles = StyleSheet.create({
   },
   progressText: {
     color: "#90adab",
-    marginTop: 8,
-    marginBottom: 8,
+    marginTop: 6,
+    marginBottom: 6,
+    fontSize: 13,
   },
   sectionTitle: {
     color: "#d8f8e6",
     fontWeight: "700",
-    marginTop: 10,
+    marginTop: 12,
     marginBottom: 6,
     fontSize: 16,
   },
@@ -352,6 +528,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     marginBottom: 6,
+  },
+  listRowColumn: {
+    backgroundColor: "#1c3437",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 8,
+  },
+  upgradeHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  upgradeLevel: {
+    color: "#bee9cc",
+    fontWeight: "700",
   },
   listText: {
     color: "#e8f5ef",
@@ -391,5 +583,29 @@ const styles = StyleSheet.create({
   },
   teamButtonTextActive: {
     color: "#fff4ea",
+  },
+  actionButton: {
+    backgroundColor: "#ec7732",
+    alignSelf: "flex-end",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  actionButtonDisabled: {
+    backgroundColor: "#4b5d5f",
+  },
+  actionButtonText: {
+    color: "#fff8f2",
+    fontWeight: "700",
+    fontSize: 12,
+  },
+  notice: {
+    backgroundColor: "#6a2b1f",
+    color: "#ffd8c2",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 8,
+    fontWeight: "600",
   },
 });
